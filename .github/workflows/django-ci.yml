@@ -1,0 +1,112 @@
+name: Django CI/CD with Railway
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Permet le déclenchement manuel
+
+jobs:
+  # ÉTAPE 1: TESTS (CI)
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+    
+    - name: Run migrations
+      run: |
+        python manage.py migrate
+    
+    - name: Run tests
+      env:
+        SECRET_KEY: test-key-not-secure
+        DEBUG: 'False'
+      run: |
+        python manage.py test --noinput
+    
+    - name: Run pytest with coverage
+      run: |
+        pytest --cov=./ --cov-report=xml --cov-report=html
+    
+    - name: Upload coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: htmlcov/
+
+  # ÉTAPE 2: BUILD (Collect static files)
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Collect static files
+      env:
+        SECRET_KEY: build-key-not-secure
+      run: |
+        python manage.py collectstatic --noinput
+    
+    - name: Upload static files
+      uses: actions/upload-artifact@v4
+      with:
+        name: staticfiles
+        path: staticfiles/
+
+  # ÉTAPE 3: DÉPLOIEMENT SUR RAILWAY (CD)
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download static files
+      uses: actions/download-artifact@v4
+      with:
+        name: staticfiles
+        path: staticfiles/
+    
+    - name: Install Railway CLI
+      run: |
+        npm install -g @railway/cli
+
+    - name: List Railway services
+      env:
+        RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      run: |
+        railway status
+    
+    - name: Deploy to Railway (with auto-create)
+      env:
+        RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      run: |
+        # Déploiement avec création automatique de service
+        railway up --detach --service "Mini-application-de-gestion-des-employ-s"
